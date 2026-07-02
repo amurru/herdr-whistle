@@ -1,6 +1,6 @@
 # Herdr Whistle
 
-Telegram bot for remote herdr agent management. List agents, read their output, send text to unblock them, close panes, and start new agents -- all from Telegram.
+Herdr plugin for remote agent management. List agents, read their output, send text to unblock them, close panes, and start new agents -- all from Telegram.
 
 ## Prerequisites
 
@@ -14,7 +14,7 @@ Telegram bot for remote herdr agent management. List agents, read their output, 
 ### 1. Build the binary
 
 ```sh
-git clone <your-repo-url> herdr-whistle
+git clone https://github.com/amurru/herdr-whistle
 cd herdr-whistle
 go build -o herdr-whistle .
 ```
@@ -47,13 +47,13 @@ owner_id = 00000000
 
 ## Usage
 
-### Start the bot
+### Start the plugin
 
 ```sh
 herdr plugin action invoke herdr-whistle.start
 ```
 
-The bot runs as a persistent daemon inside herdr. It polls Telegram for updates and shuts down cleanly when herdr stops or sends SIGTERM.
+The plugin runs as a persistent daemon inside herdr. It polls Telegram for updates and shuts down cleanly when herdr stops or sends SIGTERM.
 
 ### Check status
 
@@ -63,9 +63,9 @@ herdr plugin log list --plugin herdr-whistle
 
 Look for a log with `"status":"running"`.
 
-### Stop the bot
+### Stop the plugin
 
-The bot stops automatically when herdr exits. To stop it manually, kill the process:
+The plugin stops automatically when herdr exits. To stop it manually, kill the process:
 
 ```sh
 pkill -f herdr-whistle
@@ -81,7 +81,7 @@ herdr plugin log list --plugin herdr-whistle --limit 10
 
 For real-time output, check herdr's plugin pane or tail the plugin log file.
 
-### Update the bot
+### Update the plugin
 
 After pulling changes or rebuilding:
 
@@ -91,7 +91,7 @@ pkill -f herdr-whistle
 herdr plugin action invoke herdr-whistle.start
 ```
 
-## Bot Commands
+## Commands
 
 All commands are restricted to the configured `owner_id`. Unauthorized users receive a silent "Unauthorized" response.
 
@@ -118,20 +118,22 @@ All commands are restricted to the configured `owner_id`. Unauthorized users rec
 
 ### Command details
 
-**`/send`** is the primary way to unblock agents. When an agent is waiting for user input, `/send <target> <text>` delivers the text as if you typed it in the agent's terminal.
+**`/send`** is the primary way to unblock agents. When an agent is waiting for user input, `/send <target> <text>` sends the text followed by Enter, executing it in the agent's terminal.
 
-**`/close`** gets the agent's pane ID from `herdr agent get --json` and runs `herdr pane close <pane_id>`. The agent process is killed. Start a new one with `/start-agent`.
+**`/close`** gets the agent's pane ID from `herdr agent get` and runs `herdr pane close <pane_id>`. The agent process is killed. Start a new one with `/start-agent`.
 
 **`/start-agent`** parses arguments on `--` separator: everything before is the agent name, everything after is the command to run.
+
+**`/read`** fetches output via `herdr agent read --source recent-unwrapped` to show the agent's most recent lines.
 
 ## Architecture
 
 ```
 Telegram  <--long-poll-->  herdr-whistle  --herdr CLI-->  herdr daemon
-   user                    (Go binary)
+   user                    (herdr plugin)
 ```
 
-- The bot connects to Telegram via long-polling (no webhooks)
+- The plugin connects to Telegram via long-polling (no webhooks)
 - All herdr interactions use the `herdr` CLI via `os/exec` with 30-second timeouts
 - Authentication is enforced server-side: only `owner_id` can invoke commands
 - The binary is a single self-contained executable, no runtime dependencies
@@ -144,8 +146,9 @@ Telegram  <--long-poll-->  herdr-whistle  --herdr CLI-->  herdr daemon
 | `main.go`           | Entry point, config loading, signal handling                       |
 | `bot.go`            | Telegram bot setup, handler registration, message senders          |
 | `handlers.go`       | Command handlers, owner auth, MarkdownV2 escaping                  |
-| `herdrcli.go`       | herdr CLI command wrappers (agent list/get/send/start, pane close) |
+| `herdrcli.go`       | herdr CLI command wrappers (agent list/get/read/send, pane run/close) |
 | `config.go`         | TOML config loading                                                |
+| `watcher.go`        | Agent status watcher -- notifies on blocked transitions            |
 | `go.mod` / `go.sum` | Go module dependencies                                             |
 
 ## Security
@@ -153,4 +156,4 @@ Telegram  <--long-poll-->  herdr-whistle  --herdr CLI-->  herdr daemon
 - Only the configured `owner_id` can interact with the bot
 - No command parsing or execution beyond `herdr` CLI calls
 - herdr CLI is invoked via the `HERDR_BIN_PATH` env var (falls back to `herdr` PATH lookup)
-- All bot messages use plain text or properly escaped MarkdownV2
+- All bot messages use plain text or properly escaped HTML
