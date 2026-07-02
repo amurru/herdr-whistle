@@ -104,7 +104,7 @@ All commands are restricted to the configured `owner_id`. Unauthorized users rec
 | `/read`        | `<target>` `[N]`     | Read last N lines of agent output (default 20) |
 | `/send`        | `<target>` `<text>`  | Send text to an agent (unblocks it)            |
 | `/close`       | `<target>`           | Close an agent's terminal pane                 |
-| `/start-agent` | `<name> -- <cmd...>` | Start a new agent with a command               |
+| `/startagent` | `<name> -- <cmd...>` | Start a new agent with a command               |
 
 ### Examples
 
@@ -113,16 +113,16 @@ All commands are restricted to the configured `owner_id`. Unauthorized users rec
 /read my-agent 50
 /send my-agent continue solving the problem
 /close my-agent
-/start-agent code-helper -- python3 -m venv .venv
+/startagent code-helper -- python3 -m venv .venv
 ```
 
 ### Command details
 
 **`/send`** is the primary way to unblock agents. When an agent is waiting for user input, `/send <target> <text>` sends the text followed by Enter, executing it in the agent's terminal.
 
-**`/close`** gets the agent's pane ID from `herdr agent get` and runs `herdr pane close <pane_id>`. The agent process is killed. Start a new one with `/start-agent`.
+**`/close`** gets the agent's pane ID from `herdr agent get` and runs `herdr pane close <pane_id>`. The agent process is killed. Start a new one with `/startagent`.
 
-**`/start-agent`** parses arguments on `--` separator: everything before is the agent name, everything after is the command to run.
+**`/startagent`** parses arguments: if `--` separator is present, everything before is the agent name and everything after is the command. Without `--`, the first word is the agent name and the rest is the command.
 
 **`/read`** fetches output via `herdr agent read --source recent-unwrapped` to show the agent's most recent lines.
 

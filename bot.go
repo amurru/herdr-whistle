@@ -53,7 +53,7 @@ func startBot(ctx context.Context, cfg *Config) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "read", bot.MatchTypeCommand, readHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "send", bot.MatchTypeCommand, sendHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "close", bot.MatchTypeCommand, closeHandler)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "start-agent", bot.MatchTypeCommand, startAgentHandler)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "startagent", bot.MatchTypeCommand, startAgentHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "help", bot.MatchTypeCommand, helpHandler)
 
 	// Register inline keyboard callback handler for agent list buttons.

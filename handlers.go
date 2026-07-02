@@ -120,7 +120,7 @@ Commands:
 /read <target> [N] -- read recent agent output (default 20 lines)
 /send <target> <text> -- send text to an agent
 /close <target> -- close an agent's pane
-/start-agent <name> -- <cmd...> -- start a new agent
+/startagent <name> [-- <cmd...>] -- start a new agent
 /help -- show this message`
 	sendText(ctx, b, update.Message.Chat.ID, msg)
 }
@@ -374,26 +374,34 @@ func startAgentHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 
 	text := strings.TrimSpace(update.Message.Text)
-	// Remove "/start-agent" prefix
-	rest := strings.TrimPrefix(text, "/start-agent")
+	// Remove "/startagent" prefix
+	rest := strings.TrimPrefix(text, "/startagent")
 	rest = strings.TrimSpace(rest)
 
 	if rest == "" {
-		sendText(ctx, b, update.Message.Chat.ID, "Usage: /start-agent <name> -- <cmd...>")
+		sendText(ctx, b, update.Message.Chat.ID, "Usage: /startagent <name> [-- <cmd...>]")
 		return
 	}
 
-	// Split on " -- " to get name and command parts
-	parts := strings.SplitN(rest, "--", 2)
-	name := strings.TrimSpace(parts[0])
-	if name == "" {
-		sendText(ctx, b, update.Message.Chat.ID, "Usage: /start-agent <name> -- <cmd...>")
-		return
-	}
-
+	var name string
 	var cmdArgs []string
-	if len(parts) > 1 {
-		cmdArgs = strings.Fields(strings.TrimSpace(parts[1]))
+
+	if strings.Contains(rest, "--") {
+		parts := strings.SplitN(rest, "--", 2)
+		name = strings.TrimSpace(parts[0])
+		if name == "" {
+			sendText(ctx, b, update.Message.Chat.ID, "Usage: /startagent <name> [-- <cmd...>]")
+			return
+		}
+		if len(parts) > 1 {
+			cmdArgs = strings.Fields(strings.TrimSpace(parts[1]))
+		}
+	} else {
+		fields := strings.Fields(rest)
+		name = fields[0]
+		if len(fields) > 1 {
+			cmdArgs = fields[1:]
+		}
 	}
 
 	out, err := herdrAgentStart(name, cmdArgs...)
@@ -420,7 +428,7 @@ func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 /read <target> [N] -- read recent output (default 20 lines)
 /send <target> <text> -- send text to an agent
 /close <target> -- close an agent's terminal pane
-/start-agent <name> -- <cmd...> -- launch a new agent
+/startagent <name> [-- <cmd...>] -- launch a new agent
 /help -- show this message`
 
 	sendText(ctx, b, update.Message.Chat.ID, msg)
