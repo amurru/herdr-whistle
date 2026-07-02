@@ -1,0 +1,12 @@
+id = "herdr-whistle"
+name = "Herdr Whistle"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Telegram bot for remote herdr agent management — list, read, send, and restart agents via Telegram"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "start"
+title = "Start Telegram bot"
+contexts = ["workspace"]
+command = ["./herdr-whistle"]

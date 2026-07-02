@@ -1,0 +1,12 @@
+# herdr-whistle configuration
+#
+# Copy this file to config.toml and fill in your values.
+# By default the plugin reads from:
+#   $HERDR_PLUGIN_CONFIG_DIR/config.toml
+# or ./config.toml as a fallback.
+
+# Your Telegram Bot token from @BotFather
+token = ""
+
+# Your Telegram user ID (numeric). The bot only responds to this user.
+owner_id = 0
