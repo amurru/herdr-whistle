@@ -83,6 +83,20 @@ func ownerAuth(ctx context.Context, b *bot.Bot, update *models.Update) bool {
 	return true
 }
 
+// sanitizeTTY strips control characters that could be used for TTY injection.
+// Allows \n, \r, \t through; strips everything else below 0x20.
+func sanitizeTTY(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x20 || c == '\n' || c == '\r' || c == '\t' {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
 // escapeHTML escapes HTML special characters for safe use in Telegram HTML mode.
 func escapeHTML(s string) string {
 	replacer := strings.NewReplacer(
@@ -303,7 +317,7 @@ func sendHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 	target := args[1]
-	text := strings.Join(args[2:], " ")
+	text := sanitizeTTY(strings.Join(args[2:], " "))
 
 	paneID, err := herdrPaneGetFromAgent(target)
 	if err != nil {
