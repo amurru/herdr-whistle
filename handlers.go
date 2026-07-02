@@ -311,14 +311,14 @@ func sendHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		sendText(ctx, b, update.Message.Chat.ID, "Error resolving agent: "+err.Error())
 		return
 	}
-	out, err := herdrPaneRun(paneID, text)
+	_, err = herdrPaneRun(paneID, text)
 	if err != nil {
 		log.Printf("ERROR sending to agent %s: %v", target, err)
 		sendText(ctx, b, update.Message.Chat.ID, "Error sending to agent: "+err.Error())
 		return
 	}
 
-	reply := fmt.Sprintf("<b>Sent to %s:</b>\n%s", escapeHTML(target), escapeHTML(out))
+	reply := fmt.Sprintf("<b>Sent to %s.</b>", escapeHTML(target))
 	sendFormatted(ctx, b, update.Message.Chat.ID, reply)
 }
 
