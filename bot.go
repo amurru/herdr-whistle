@@ -56,8 +56,9 @@ func startBot(ctx context.Context, cfg *Config) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "startagent", bot.MatchTypeCommand, startAgentHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "help", bot.MatchTypeCommand, helpHandler)
 
-	// Register inline keyboard callback handler for agent list buttons.
+	// Register inline keyboard callback handlers.
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "al|", bot.MatchTypePrefix, agentsCallbackHandler)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, choiceCallbackPrefix, bot.MatchTypePrefix, choiceCallbackHandler)
 
 	// Start the background agent watcher goroutine.
 	// It polls herdr agent list every 5 seconds and notifies the owner

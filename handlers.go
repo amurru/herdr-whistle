@@ -440,6 +440,62 @@ const (
 	cbPrefix = "al|" // agent list callbacks start with "al|"
 )
 
+// Callback data: ch|{paneID}|{index} (1-based).
+func choiceCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.CallbackQuery == nil {
+		return
+	}
+	data := update.CallbackQuery.Data
+	if !strings.HasPrefix(data, choiceCallbackPrefix) {
+		return
+	}
+
+	var chatID int64
+	var msgID int
+	if msg := update.CallbackQuery.Message.Message; msg != nil {
+		chatID = msg.Chat.ID
+		msgID = msg.ID
+	} else if im := update.CallbackQuery.Message.InaccessibleMessage; im != nil {
+		chatID = im.Chat.ID
+		msgID = im.MessageID
+	} else {
+		return
+	}
+	userID := update.CallbackQuery.From.ID
+
+	if userID != cfgGlobal.OwnerID {
+		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Unauthorized",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: update.CallbackQuery.ID,
+	})
+
+	trimmed := strings.TrimPrefix(data, choiceCallbackPrefix)
+	parts := strings.SplitN(trimmed, "|", 2)
+	if len(parts) < 2 {
+		return
+	}
+	paneID := parts[0]
+	choiceIndex := parts[1]
+
+	_, err := herdrPaneRun(paneID, choiceIndex)
+	if err != nil {
+		log.Printf("ERROR sending choice %s to pane %s: %v", choiceIndex, paneID, err)
+		editMessageText(ctx, b, chatID, msgID,
+			fmt.Sprintf("Error sending choice %s: %s", escapeHTML(choiceIndex), escapeHTML(err.Error())))
+		return
+	}
+
+	editMessageText(ctx, b, chatID, msgID,
+		fmt.Sprintf("Sent choice <b>%s</b> to <b>%s</b>.", escapeHTML(choiceIndex), escapeHTML(paneID)))
+}
+
 // agentsCallbackHandler processes button presses on the agent list inline keyboard.
 func agentsCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
