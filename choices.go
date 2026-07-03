@@ -10,15 +10,12 @@ import (
 
 // parsedChoice represents a single option in a selection prompt.
 type parsedChoice struct {
-	RawText   string // original line text
 	CleanText string // text with selection indicator stripped
 }
 
 // parsedChoices holds the parsed selection prompt.
 type parsedChoices struct {
 	Prompt  string         // the question line (e.g. "? How to proceed")
-	Help    string         // bottom bar (e.g. "Enter to select")
-	Multi   bool           // true if multi-select (Space-based)
 	Choices []parsedChoice // the available options
 }
 
@@ -53,9 +50,6 @@ func parseChoices(output string) *parsedChoices {
 	if helpIdx < 0 {
 		return nil
 	}
-
-	helpLine := strings.TrimSpace(lines[helpIdx])
-	multi := strings.Contains(helpLine, "Space")
 
 	// --- 2. Find the prompt question above the help bar ---
 	prompt := ""
@@ -93,7 +87,6 @@ func parseChoices(output string) *parsedChoices {
 		}
 
 		choices = append(choices, parsedChoice{
-			RawText:   lines[i],
 			CleanText: clean,
 		})
 	}
@@ -104,8 +97,6 @@ func parseChoices(output string) *parsedChoices {
 
 	return &parsedChoices{
 		Prompt:  prompt,
-		Help:    helpLine,
-		Multi:   multi,
 		Choices: choices,
 	}
 }
@@ -174,7 +165,6 @@ func parseBoxChoices(output string) *parsedChoices {
 		}
 		if matches := choiceLineRe.FindStringSubmatch(trimmed); matches != nil {
 			choices = append(choices, parsedChoice{
-				RawText:   trimmed,
 				CleanText: strings.TrimSpace(matches[2]),
 			})
 		}
