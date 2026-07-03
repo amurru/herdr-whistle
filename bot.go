@@ -57,7 +57,7 @@ func startBot(ctx context.Context, cfg *Config) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "help", bot.MatchTypeCommand, helpHandler)
 
 	// Register inline keyboard callback handlers.
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "al|", bot.MatchTypePrefix, agentsCallbackHandler)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, cbPrefix, bot.MatchTypePrefix, agentsCallbackHandler)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, choiceCallbackPrefix, bot.MatchTypePrefix, choiceCallbackHandler)
 
 	// Start the background agent watcher goroutine.

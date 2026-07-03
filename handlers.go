@@ -47,9 +47,6 @@ type agentGetEnvelope struct {
 
 type agentGetNestedResult struct {
 	Agent agentInfo `json:"agent"`
-}// agentExplainResult is the herdr explain response (flat-ish).
-type agentExplainResult struct {
-	State string `json:"state"`
 }
 
 type agentReadEnvelope struct {
@@ -139,7 +136,7 @@ func shortenPath(path string) string {
 
 // buildAgentList calls herdr agent list, parses the JSON, and returns
 // a formatted HTML message with an inline keyboard for each agent.
-func buildAgentList(ctx context.Context) (string, *models.InlineKeyboardMarkup, error) {
+func buildAgentList() (string, *models.InlineKeyboardMarkup, error) {
 	raw, err := herdrAgentList()
 	if err != nil {
 		return "", nil, err
@@ -217,7 +214,7 @@ func agentsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	msg, kb, err := buildAgentList(ctx)
+	msg, kb, err := buildAgentList()
 	if err != nil {
 		log.Printf("ERROR building agent list: %v", err)
 		sendText(ctx, b, update.Message.Chat.ID, "Error listing agents: "+err.Error())
@@ -440,6 +437,17 @@ const (
 	cbPrefix = "al|" // agent list callbacks start with "al|"
 )
 
+// callbackChatInfo extracts chatID and msgID from a callback query's
+// MaybeInaccessibleMessage union. Returns false if neither branch is set.
+func callbackChatInfo(update *models.Update) (chatID int64, msgID int, ok bool) {
+	if msg := update.CallbackQuery.Message.Message; msg != nil {
+		return msg.Chat.ID, msg.ID, true
+	} else if im := update.CallbackQuery.Message.InaccessibleMessage; im != nil {
+		return im.Chat.ID, im.MessageID, true
+	}
+	return 0, 0, false
+}
+
 // Callback data: ch|{paneID}|{index} (1-based).
 func choiceCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
@@ -450,15 +458,8 @@ func choiceCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 		return
 	}
 
-	var chatID int64
-	var msgID int
-	if msg := update.CallbackQuery.Message.Message; msg != nil {
-		chatID = msg.Chat.ID
-		msgID = msg.ID
-	} else if im := update.CallbackQuery.Message.InaccessibleMessage; im != nil {
-		chatID = im.Chat.ID
-		msgID = im.MessageID
-	} else {
+	chatID, msgID, ok := callbackChatInfo(update)
+	if !ok {
 		return
 	}
 	userID := update.CallbackQuery.From.ID
@@ -506,16 +507,8 @@ func agentsCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 		return
 	}
 
-	// Extract chat/message from the MaybeInaccessibleMessage union.
-	var chatID int64
-	var msgID int
-	if msg := update.CallbackQuery.Message.Message; msg != nil {
-		chatID = msg.Chat.ID
-		msgID = msg.ID
-	} else if im := update.CallbackQuery.Message.InaccessibleMessage; im != nil {
-		chatID = im.Chat.ID
-		msgID = im.MessageID
-	} else {
+	chatID, msgID, ok := callbackChatInfo(update)
+	if !ok {
 		return
 	}
 	userID := update.CallbackQuery.From.ID
@@ -562,7 +555,7 @@ func agentsCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 }
 
 func handleRefresh(ctx context.Context, b *bot.Bot, chatID int64, msgID int) {
-	msg, kb, err := buildAgentList(ctx)
+	msg, kb, err := buildAgentList()
 	if err != nil {
 		log.Printf("ERROR rebuilding agent list: %v", err)
 		editMessageText(ctx, b, chatID, msgID, "Error refreshing: "+escapeHTML(err.Error()))
@@ -681,7 +674,7 @@ func handleAgentCloseExec(ctx context.Context, b *bot.Bot, chatID int64, msgID i
 
 	editMessageText(ctx, b, chatID, msgID,
 		fmt.Sprintf("Pane <b>%s</b> closed.", escapeHTML(paneID)))
-	_ = out
+	_ = out // herdrPaneClose output is shown in the edit message above
 }
 
 func handleAgentCloseCancel(ctx context.Context, b *bot.Bot, chatID int64, msgID int, paneID string) {
