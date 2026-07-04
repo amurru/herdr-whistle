@@ -49,6 +49,9 @@ func herdrAgentExplain(target string) (string, error) {
 	return runCommand(ctx, "agent", "explain", target, "--json")
 }
 
+// herdrAgentRead reads recent agent output. The target may be either an agent
+// name (as used by the /read command) or a pane ID (as used by the inline
+// buttons and the watcher); herdr resolves both.
 func herdrAgentRead(target string, lines int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -93,6 +96,15 @@ func herdrPaneRun(paneID, command string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return runCommand(ctx, "pane", "run", paneID, command)
+}
+
+// herdrPaneSendKeys sends tmux-style key names (e.g. "Down", "Up", "Enter",
+// "Space") to a pane. Used to drive interactive TUI selection menus that
+// respond to arrow keys rather than typed digits.
+func herdrPaneSendKeys(paneID string, keys ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return runCommand(ctx, append([]string{"pane", "send-keys", paneID}, keys...)...)
 }
 
 func herdrPaneClose(paneID string) (string, error) {

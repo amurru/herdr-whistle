@@ -79,9 +79,14 @@ func parseChoices(output string) *parsedChoices {
 			continue
 		}
 
-		// Clean the choice text: strip the leading indicator character.
-		clean := choiceIndicators.ReplaceAllString(stripped, "")
-		clean = strings.TrimSpace(clean)
+		// Strip a leading box-drawing border (│) and the selection cursor
+		// (❯/◆/●/...) to get the clean option text. Every non-empty line in
+		// this region is treated as a choice: @clack single-select marks only
+		// the active option with a cursor, so requiring a cursor would drop the
+		// inactive options. Multi-line descriptions can therefore surface as
+		// extra choices -- a known limitation, rare in practice for these menus.
+		content := strings.TrimLeft(stripped, "│ \t")
+		clean := strings.TrimSpace(choiceIndicators.ReplaceAllString(content, ""))
 		if clean == "" {
 			continue
 		}

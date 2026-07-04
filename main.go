@@ -33,8 +33,8 @@ func main() {
 	defer cancel()
 
 	fmt.Fprintf(os.Stderr, "Starting herdr-whistle bot...\n")
+	// startBot blocks on b.Start(ctx), which runs until ctx is cancelled by
+	// SIGINT/SIGTERM. If it ever returns early we exit rather than hang.
 	startBot(ctx, cfg)
-
-	<-ctx.Done()
 	fmt.Fprintf(os.Stderr, "Shutting down...\n")
 }

@@ -8,10 +8,52 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
+
+// commandHelp is the canonical command list, shared by /start and /help so the
+// two cannot drift apart.
+const commandHelp = `Commands:
+/agents -- list all agents
+/status <target> -- show agent status and explanation
+/read <target> [N] -- read recent agent output (default 20 lines)
+/send <target> <text> -- send text to an agent
+/close <target> -- close an agent's pane
+/startagent <name> [-- <cmd...>] -- start a new agent
+/help -- show this message`
+
+// formatAgentStatus builds an HTML status message for an agent target (agent
+// name or pane ID). Falls back to raw JSON in a code block if parsing fails.
+// Shared by the /status command and the inline 🔍 button so they stay
+// consistent.
+func formatAgentStatus(target string) (string, error) {
+	getOut, err := herdrAgentGet(target)
+	if err != nil {
+		return "", err
+	}
+	return formatAgentFromGet(getOut), nil
+}
+
+// formatAgentFromGet renders the JSON from "herdr agent get" as a status
+// message, falling back to the raw output in a code block if it doesn't parse.
+func formatAgentFromGet(getOut string) string {
+	var env agentGetEnvelope
+	if json.Unmarshal([]byte(getOut), &env) == nil && env.Result.Agent.Agent != "" {
+		a := env.Result.Agent
+		return fmt.Sprintf(
+			"<b>%s</b>\n\nStatus: %s\nPane: %s\nWorkspace: %s\nCwd: %s",
+			escapeHTML(a.Agent),
+			a.AgentStatus,
+			escapeHTML(a.PaneID),
+			escapeHTML(a.WorkspaceID),
+			escapeHTML(a.Cwd),
+		)
+	}
+	return "<pre><code>" + escapeHTML(getOut) + "</code></pre>"
+}
 
 // ----- JSON types for herdr CLI responses -----
 
@@ -29,14 +71,14 @@ type agentSession struct {
 }
 
 type agentInfo struct {
-	Agent            string       `json:"agent"`
-	AgentSession     agentSession `json:"agent_session"`
-	AgentStatus      string       `json:"agent_status"`
-	WorkspaceID      string       `json:"workspace_id"`
-	PaneID           string       `json:"pane_id"`
-	Cwd              string       `json:"cwd"`
-	Focused          bool         `json:"focused"`
-	ForegroundCwd    string       `json:"foreground_cwd"`
+	Agent         string       `json:"agent"`
+	AgentSession  agentSession `json:"agent_session"`
+	AgentStatus   string       `json:"agent_status"`
+	WorkspaceID   string       `json:"workspace_id"`
+	PaneID        string       `json:"pane_id"`
+	Cwd           string       `json:"cwd"`
+	Focused       bool         `json:"focused"`
+	ForegroundCwd string       `json:"foreground_cwd"`
 }
 
 // agentGetEnvelope wraps the top-level herdr CLI response for agent get.
@@ -59,7 +101,7 @@ type agentReadResult struct {
 }
 
 type agentReadContent struct {
-	Text string `json:"text"`
+	Text   string `json:"text"`
 	PaneID string `json:"pane_id"`
 }
 
@@ -109,26 +151,38 @@ func startHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !ownerAuth(ctx, b, update) {
 		return
 	}
-	msg := `Welcome to herdr-whistle -- Telegram remote control for herdr agents.
-
-Commands:
-/agents -- list all agents
-/status <target> -- show agent status and explanation
-/read <target> [N] -- read recent agent output (default 20 lines)
-/send <target> <text> -- send text to an agent
-/close <target> -- close an agent's pane
-/startagent <name> [-- <cmd...>] -- start a new agent
-/help -- show this message`
+	msg := "Welcome to herdr-whistle -- Telegram remote control for herdr agents.\n\n" + commandHelp
 	sendText(ctx, b, update.Message.Chat.ID, msg)
+}
+
+var (
+	homeOnce sync.Once
+	homeDir  string
+)
+
+// homeDirectory returns the cached user home directory (empty if it can't be
+// resolved). Looked up once; shortenPath is called per agent per render.
+func homeDirectory() string {
+	homeOnce.Do(func() {
+		if h, err := os.UserHomeDir(); err == nil {
+			homeDir = h
+		}
+	})
+	return homeDir
 }
 
 // shortenPath replaces the user's home directory with ~ for display.
 func shortenPath(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	return shortenPathIn(path, homeDirectory())
+}
+
+// shortenPathIn replaces home with ~. It matches on a path boundary so
+// "/home/user" is not mistaken for "/home/user2". Pure for testing.
+func shortenPathIn(path, home string) string {
+	if home == "" {
 		return path
 	}
-	if strings.HasPrefix(path, home) {
+	if path == home || strings.HasPrefix(path, home+"/") {
 		return "~" + path[len(home):]
 	}
 	return path
@@ -245,27 +299,24 @@ func statusHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 	target := args[1]
 
-	getOut, err := herdrAgentGet(target)
+	statusMsg, err := formatAgentStatus(target)
 	if err != nil {
 		log.Printf("ERROR getting agent %s: %v", target, err)
 		sendText(ctx, b, update.Message.Chat.ID, "Error getting agent: "+err.Error())
 		return
 	}
 
-	explainOut, err := herdrAgentExplain(target)
-	if err != nil {
-		log.Printf("ERROR explaining agent %s: %v", target, err)
-		sendText(ctx, b, update.Message.Chat.ID, "Error explaining agent: "+err.Error())
-		return
-	}
-
+	// Append the agent's explanation, best-effort. explain returns JSON, so it
+	// is shown verbatim in a code block as supplementary context.
 	var sb strings.Builder
-	sb.WriteString("<pre><code>")
-	sb.WriteString(escapeHTML(getOut))
-	sb.WriteString("</code></pre>\n\n")
-	sb.WriteString("<pre><code>")
-	sb.WriteString(escapeHTML(explainOut))
-	sb.WriteString("</code></pre>")
+	sb.WriteString(statusMsg)
+	if explainOut, err := herdrAgentExplain(target); err == nil && strings.TrimSpace(explainOut) != "" {
+		sb.WriteString("\n\n<pre><code>")
+		sb.WriteString(escapeHTML(explainOut))
+		sb.WriteString("</code></pre>")
+	} else if err != nil {
+		log.Printf("WARN explaining agent %s: %v", target, err)
+	}
 
 	sendFormatted(ctx, b, update.Message.Chat.ID, sb.String())
 }
@@ -364,6 +415,28 @@ func closeHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	sendFormatted(ctx, b, update.Message.Chat.ID, reply)
 }
 
+// parseStartAgentArgs splits a "/startagent" argument string into an agent
+// name and command args. A standalone "--" token separates the name from the
+// command; everything after it is passed verbatim so command flags (--foo) are
+// preserved. Tokens before "--" (after the name) are also treated as command
+// args, matching "/startagent <name> <cmd...>" usage. Returns ("", nil) for
+// empty/whitespace-only input.
+func parseStartAgentArgs(rest string) (name string, cmdArgs []string) {
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return "", nil
+	}
+	name = fields[0]
+	for i := 1; i < len(fields); i++ {
+		if fields[i] == "--" {
+			cmdArgs = append(cmdArgs, fields[i+1:]...)
+			break
+		}
+		cmdArgs = append(cmdArgs, fields[i])
+	}
+	return name, cmdArgs
+}
+
 // startAgentHandler starts a new agent with a command.
 func startAgentHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !ownerAuth(ctx, b, update) {
@@ -380,26 +453,7 @@ func startAgentHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	var name string
-	var cmdArgs []string
-
-	if strings.Contains(rest, "--") {
-		parts := strings.SplitN(rest, "--", 2)
-		name = strings.TrimSpace(parts[0])
-		if name == "" {
-			sendText(ctx, b, update.Message.Chat.ID, "Usage: /startagent <name> [-- <cmd...>]")
-			return
-		}
-		if len(parts) > 1 {
-			cmdArgs = strings.Fields(strings.TrimSpace(parts[1]))
-		}
-	} else {
-		fields := strings.Fields(rest)
-		name = fields[0]
-		if len(fields) > 1 {
-			cmdArgs = fields[1:]
-		}
-	}
+	name, cmdArgs := parseStartAgentArgs(rest)
 
 	out, err := herdrAgentStart(name, cmdArgs...)
 	if err != nil {
@@ -417,18 +471,7 @@ func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !ownerAuth(ctx, b, update) {
 		return
 	}
-
-	msg := `Available commands:
-
-/agents -- list all agents (with inline buttons)
-/status <target> -- show agent status and explanation
-/read <target> [N] -- read recent output (default 20 lines)
-/send <target> <text> -- send text to an agent
-/close <target> -- close an agent's terminal pane
-/startagent <name> [-- <cmd...>] -- launch a new agent
-/help -- show this message`
-
-	sendText(ctx, b, update.Message.Chat.ID, msg)
+	sendText(ctx, b, update.Message.Chat.ID, "Available commands:\n\n"+commandHelp)
 }
 
 // ----- Inline keyboard callback handler -----
@@ -449,6 +492,19 @@ func callbackChatInfo(update *models.Update) (chatID int64, msgID int, ok bool) 
 }
 
 // Callback data: ch|{paneID}|{index} (1-based).
+
+// choiceKeys builds the tmux send-keys sequence to select the 1-based option
+// idx in an interactive TUI menu: the first option is highlighted by default,
+// so option N needs (N-1) Down presses followed by Enter. idx must be >= 1.
+func choiceKeys(idx int) []string {
+	keys := make([]string, 0, idx)
+	for j := 1; j < idx; j++ {
+		keys = append(keys, "Down")
+	}
+	keys = append(keys, "Enter")
+	return keys
+}
+
 func choiceCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
 		return
@@ -485,8 +541,13 @@ func choiceCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 	paneID := parts[0]
 	choiceIndex := parts[1]
 
-	_, err := herdrPaneRun(paneID, choiceIndex)
-	if err != nil {
+	idx, err := strconv.Atoi(choiceIndex)
+	if err != nil || idx < 1 {
+		editMessageText(ctx, b, chatID, msgID, "Invalid choice.")
+		return
+	}
+
+	if _, err := herdrPaneSendKeys(paneID, choiceKeys(idx)...); err != nil {
 		log.Printf("ERROR sending choice %s to pane %s: %v", choiceIndex, paneID, err)
 		editMessageText(ctx, b, chatID, msgID,
 			fmt.Sprintf("Error sending choice %s: %s", escapeHTML(choiceIndex), escapeHTML(err.Error())))
@@ -580,30 +641,12 @@ func handleAgentStatus(ctx context.Context, b *bot.Bot, chatID int64, target str
 	if target == "" {
 		return
 	}
-
-	getOut, err := herdrAgentGet(target)
+	msg, err := formatAgentStatus(target)
 	if err != nil {
 		sendText(ctx, b, chatID, "Error getting agent: "+err.Error())
 		return
 	}
-
-	var env agentGetEnvelope
-	if json.Unmarshal([]byte(getOut), &env) == nil && env.Result.Agent.Agent != "" {
-		a := env.Result.Agent
-		msg := fmt.Sprintf(
-			"<b>%s</b>\n\nStatus: %s\nPane: %s\nWorkspace: %s\nCwd: %s",
-			escapeHTML(a.Agent),
-			a.AgentStatus,
-			escapeHTML(a.PaneID),
-			escapeHTML(a.WorkspaceID),
-			escapeHTML(a.Cwd),
-		)
-		sendFormatted(ctx, b, chatID, msg)
-	} else {
-		// Fallback: show raw JSON if parsing fails.
-		formatted := "<pre><code>" + escapeHTML(getOut) + "</code></pre>"
-		sendFormatted(ctx, b, chatID, formatted)
-	}
+	sendFormatted(ctx, b, chatID, msg)
 }
 
 func handleAgentRead(ctx context.Context, b *bot.Bot, chatID int64, target string) {
@@ -686,19 +729,21 @@ func handleAgentCloseCancel(ctx context.Context, b *bot.Bot, chatID int64, msgID
 
 // editMessageText is a helper that edits a message's text (HTML).
 func editMessageText(ctx context.Context, b *bot.Bot, chatID int64, msgID int, text string) {
-	b.EditMessageText(ctx, &bot.EditMessageTextParams{
+	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: msgID,
 		Text:      text,
 		ParseMode: models.ParseModeHTML,
-	})
+	}); err != nil {
+		log.Printf("ERROR editing message %d in chat %d: %v", msgID, chatID, err)
+	}
 }
 
 // ---------------------------------------------
 
 // defaultHandler replies to unrecognized messages.
 func defaultHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	if update.Message == nil {
+	if update.Message == nil || update.Message.From == nil {
 		return
 	}
 	if update.Message.From.ID != cfgGlobal.OwnerID {

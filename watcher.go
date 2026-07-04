@@ -29,8 +29,21 @@ func agentWatcher(ctx context.Context, b *bot.Bot, chatID int64) {
 		SessionID string
 	}
 
-	var mu sync.Mutex
 	prevStatus := map[sessionKey]string{}
+
+	// Notifications are dispatched to a dedicated goroutine so the slow parts
+	// of notifyBlocked (a herdr agent read and a Telegram send, each with a
+	// 30s timeout) cannot stall the 5s polling cadence. The buffer absorbs
+	// bursts; if it ever fills we drop+log rather than block the poll loop.
+	notifyCh := make(chan agentInfo, 64)
+	var notifyWG sync.WaitGroup
+	notifyWG.Add(1)
+	go func() {
+		defer notifyWG.Done()
+		for a := range notifyCh {
+			notifyBlocked(ctx, b, chatID, a)
+		}
+	}()
 
 	refresh := func() {
 		out, err := herdrAgentList()
@@ -45,16 +58,15 @@ func agentWatcher(ctx context.Context, b *bot.Bot, chatID int64) {
 			return
 		}
 		var lr agentListResult
-		if err := json.Unmarshal([]byte(env.Result), &lr); err != nil {
+		if err := json.Unmarshal(env.Result, &lr); err != nil {
 			log.Printf("WARN agentWatcher: parsing result: %v", err)
 			return
 		}
 
-		mu.Lock()
-		defer mu.Unlock()
-
-		// Collect pane_ids seen in this poll.
+		// Collect agents that transitioned into "blocked" this poll. The poll
+		// loop is the only goroutine touching prevStatus, so no lock is needed.
 		seen := map[string]bool{}
+		var toNotify []agentInfo
 		for _, a := range lr.Agents {
 			if a.PaneID == "" {
 				continue
@@ -66,7 +78,7 @@ func agentWatcher(ctx context.Context, b *bot.Bot, chatID int64) {
 			currStatus := strings.ToLower(a.AgentStatus)
 
 			if exists && oldStatus != "blocked" && currStatus == "blocked" {
-				notifyBlocked(ctx, b, chatID, a)
+				toNotify = append(toNotify, a)
 			}
 
 			prevStatus[sk] = currStatus
@@ -78,6 +90,14 @@ func agentWatcher(ctx context.Context, b *bot.Bot, chatID int64) {
 				delete(prevStatus, sk)
 			}
 		}
+
+		for _, a := range toNotify {
+			select {
+			case notifyCh <- a:
+			default:
+				log.Printf("WARN agentWatcher: notification queue full, dropping blocked notification for %s", a.Agent)
+			}
+		}
 	}
 
 	// Do an immediate refresh on start to seed state.
@@ -86,6 +106,10 @@ func agentWatcher(ctx context.Context, b *bot.Bot, chatID int64) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Close the channel so the notifier drains and exits, then wait
+			// for any in-flight notification to finish (deterministic shutdown).
+			close(notifyCh)
+			notifyWG.Wait()
 			return
 		case <-ticker.C:
 			refresh()
@@ -177,5 +201,3 @@ var notifyBlocked = func(ctx context.Context, b *bot.Bot, chatID int64, a agentI
 
 	sendFormatted(ctx, b, chatID, sb.String())
 }
-
-
