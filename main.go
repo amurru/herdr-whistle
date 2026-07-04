@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,41 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch:
+	//   herdr-whistle start -> probe the single-instance lock, detach a worker, return
+	//   herdr-whistle stop  -> SIGTERM the running instance via its pidfile
+	//   herdr-whistle run   -> run the bot in the foreground (also the default)
+	//
+	// herdr's manifest invokes "start" from the autostart action and the
+	// workspace event hooks; "run" is the long-lived Telegram bot. A bare
+	// invocation (manual/debug) defaults to "run" so it stays in the foreground.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "start":
+			if err := runStart(); err != nil {
+				log.Fatalf("start: %v", err)
+			}
+			return
+		case "stop":
+			if err := runStop(); err != nil {
+				log.Fatalf("stop: %v", err)
+			}
+			return
+		case "run":
+			// fall through to the foreground run path below
+		default:
+			log.Fatalf("unknown subcommand %q (expected start|stop|run)", os.Args[1])
+		}
+	}
+
+	if err := runBot(); err != nil {
+		log.Fatalf("%v", err)
+	}
+}
+
+// runBot loads config, takes the single-instance lock, writes the pidfile, and
+// blocks on the Telegram bot until SIGINT/SIGTERM.
+func runBot() error {
 	// Determine config path from environment or use default.
 	configPath := "./config.toml"
 	if envDir := os.Getenv("HERDR_PLUGIN_CONFIG_DIR"); envDir != "" {
@@ -19,14 +55,36 @@ func main() {
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
-		log.Fatalf("ERROR loading config from %s: %v", configPath, err)
+		return fmt.Errorf("loading config from %s: %w", configPath, err)
 	}
-
 	if cfg.Token == "" {
-		log.Fatalf("ERROR: bot token is empty in configuration")
+		return errors.New("bot token is empty in configuration")
 	}
 	if cfg.OwnerID == 0 {
-		log.Fatalf("ERROR: owner_id is not set in configuration")
+		return errors.New("owner_id is not set in configuration")
+	}
+
+	// Single-instance: refuse to poll Telegram if another instance holds the
+	// canonical lock. Telegram allows only one getUpdates poller per token, so a
+	// second instance would cause 409 conflicts.
+	stateDir, err := canonicalStateDir()
+	if err != nil {
+		return fmt.Errorf("resolving state dir: %w", err)
+	}
+	lock, err := acquireInstanceLock(stateDir)
+	if err != nil {
+		if errors.Is(err, errLockHeld) {
+			log.Printf("another herdr-whistle instance is running (lock %s); exiting", filepath.Join(stateDir, "instance.lock"))
+			return nil
+		}
+		return fmt.Errorf("acquiring instance lock: %w", err)
+	}
+	// Hold the lock for the whole process lifetime; closing releases it.
+	defer lock.Close()
+	if err := writePidFile(stateDir, os.Getpid()); err != nil {
+		log.Printf("WARN writing pidfile: %v", err)
+	} else {
+		defer func() { _ = os.Remove(filepath.Join(stateDir, "bot.pid")) }()
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -37,4 +95,5 @@ func main() {
 	// SIGINT/SIGTERM. If it ever returns early we exit rather than hang.
 	startBot(ctx, cfg)
 	fmt.Fprintf(os.Stderr, "Shutting down...\n")
+	return nil
 }
