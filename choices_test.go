@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 )
 
@@ -124,5 +126,114 @@ func TestParseBoxChoicesReturnsCorrectPrompt(t *testing.T) {
 	}
 	if pc.Prompt != "What is your favorite programming language?" {
 		t.Errorf("expected 'What is your favorite programming language?', got '%s'", pc.Prompt)
+	}
+}
+
+// TestParseChoicesClackSingleSelect guards the @clack single-select format:
+// only the active option carries the \u276f cursor; inactive options are plain.
+// All options must be captured -- a naive "require a cursor" filter would
+// drop the inactive ones.
+func TestParseChoicesClackSingleSelect(t *testing.T) {
+	input := "? Select a framework\n" +
+		"\u2502\n" +
+		"\u2502  \u276f  Next.js\n" +
+		"\u2502     Nuxt\n" +
+		"\u2502     Remix\n" +
+		"\u2502\n" +
+		"\u2514  \u2191\u2193 to navigate \u00b7 enter to select\n"
+	pc := parseChoices(input)
+	if pc == nil {
+		t.Fatal("parseChoices returned nil")
+	}
+	if pc.Prompt != "? Select a framework" {
+		t.Errorf("expected prompt '? Select a framework', got '%s'", pc.Prompt)
+	}
+	if len(pc.Choices) != 3 {
+		t.Fatalf("expected 3 choices, got %d: %+v", len(pc.Choices), pc.Choices)
+	}
+	want := []string{"Next.js", "Nuxt", "Remix"}
+	for i, w := range want {
+		if pc.Choices[i].CleanText != w {
+			t.Errorf("choice %d: expected '%s', got '%s'", i, w, pc.Choices[i].CleanText)
+		}
+	}
+}
+
+// TestParseChoicesStripsBorderAndCursor confirms the \u276f cursor and \u2502 border
+// are stripped from the active option's clean text.
+func TestParseChoicesStripsBorderAndCursor(t *testing.T) {
+	input := "? Pick one\n\n\u276f  First\n   Second\n   Third\n\nenter to select\n"
+	pc := parseChoices(input)
+	if pc == nil {
+		t.Fatal("parseChoices returned nil")
+	}
+	if pc.Choices[0].CleanText != "First" {
+		t.Errorf("expected 'First' (cursor stripped), got '%s'", pc.Choices[0].CleanText)
+	}
+}
+
+// TestParseChoicesNoHelpBar: without a recognizable help bar there is no menu.
+func TestParseChoicesNoHelpBar(t *testing.T) {
+	input := "? Pick one\n\u276f  A\n   B\n"
+	if pc := parseChoices(input); pc != nil {
+		t.Fatalf("expected nil for input with no help bar, got %+v", pc)
+	}
+}
+
+// TestParseChoicesAllCursors: when every option carries a cursor (multiselect
+// style with \u25cf/\u25cb), all are captured and the cursors stripped.
+func TestParseChoicesAllCursors(t *testing.T) {
+	input := "? Select items\n" +
+		"\u2502\n" +
+		"\u2502  \u25cf  Option A\n" +
+		"\u2502  \u25cb  Option B\n" +
+		"\u2502\n" +
+		"\u2514  \u2191\u2193 navigate \u00b7 space to select \u00b7 enter to submit\n"
+	pc := parseChoices(input)
+	if pc == nil {
+		t.Fatal("parseChoices returned nil")
+	}
+	if len(pc.Choices) != 2 {
+		t.Fatalf("expected 2 choices, got %d: %+v", len(pc.Choices), pc.Choices)
+	}
+	if pc.Choices[0].CleanText != "Option A" {
+		t.Errorf("choice 0: got '%s'", pc.Choices[0].CleanText)
+	}
+	if pc.Choices[1].CleanText != "Option B" {
+		t.Errorf("choice 1: got '%s'", pc.Choices[1].CleanText)
+	}
+}
+
+// TestBuildChoiceKeyboard verifies the layout (5 per row) and the 1-based
+// "ch|{paneID}|{index}" callback data that choiceCallbackHandler relies on.
+func TestBuildChoiceKeyboard(t *testing.T) {
+	pc := &parsedChoices{Choices: []parsedChoice{
+		{"A"}, {"B"}, {"C"}, {"D"}, {"E"}, {"F"},
+	}}
+	kb := buildChoiceKeyboard(pc, "wA:p1")
+	if kb == nil {
+		t.Fatal("nil keyboard")
+	}
+	// 6 choices, 5 per row -> 2 rows.
+	if got := len(kb.InlineKeyboard); got != 2 {
+		t.Fatalf("expected 2 rows, got %d", got)
+	}
+	if got := len(kb.InlineKeyboard[0]); got != 5 {
+		t.Fatalf("expected 5 buttons in row 0, got %d", got)
+	}
+	if got := len(kb.InlineKeyboard[1]); got != 1 {
+		t.Fatalf("expected 1 button in row 1, got %d", got)
+	}
+	for i, btn := range kb.InlineKeyboard[0] {
+		wantData := fmt.Sprintf("ch|wA:p1|%d", i+1)
+		if btn.CallbackData != wantData {
+			t.Errorf("row0[%d] data=%q, want %q", i, btn.CallbackData, wantData)
+		}
+		if btn.Text != strconv.Itoa(i+1) {
+			t.Errorf("row0[%d] text=%q, want %q", i, btn.Text, strconv.Itoa(i+1))
+		}
+	}
+	if kb.InlineKeyboard[1][0].CallbackData != "ch|wA:p1|6" {
+		t.Errorf("row1[0] data=%q, want \"ch|wA:p1|6\"", kb.InlineKeyboard[1][0].CallbackData)
 	}
 }

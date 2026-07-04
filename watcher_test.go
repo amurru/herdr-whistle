@@ -290,3 +290,36 @@ func TestAgentStatusLowercasing(t *testing.T) {
 		}
 	}
 }
+
+// TestWatcherDrainsSlowNotifications proves the async dispatch + WaitGroup
+// shutdown work: a slow notifyBlocked (simulating a herdr read + Telegram send)
+// is still counted by the time agentWatcher returns. Notifications now run on a
+// dedicated goroutine, so this also confirms the poll loop no longer blocks on
+// notifyBlocked directly.
+func TestWatcherDrainsSlowNotifications(t *testing.T) {
+	callCount := 0
+	callNum := 0
+	herdrAgentList = func() (string, error) {
+		callNum++
+		switch callNum {
+		case 1:
+			return fmt.Sprintf(sampleAgentListJSON, "idle", "idle"), nil
+		default:
+			return fmt.Sprintf(sampleAgentListJSON, "blocked", "idle"), nil
+		}
+	}
+	origNotify := notifyBlocked
+	notifyBlocked = func(ctx context.Context, b *bot.Bot, chatID int64, a agentInfo) {
+		time.Sleep(300 * time.Millisecond)
+		callCount++
+	}
+	defer func() { notifyBlocked = origNotify }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	agentWatcher(ctx, &bot.Bot{}, 0)
+
+	if callCount != 1 {
+		t.Errorf("expected 1 notification after slow notify, got %d", callCount)
+	}
+}
